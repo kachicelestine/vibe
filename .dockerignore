@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies (rebuilt inside Docker)
+node_modules
+
+# Next.js build output (rebuilt inside Docker)
+.next
+
+# Environment files – NEVER copy secrets into an image
+.env
+.env.*
+!env.example
+
+# Development tooling
+.vscode
+.inngest
+
+# E2B sandbox templates (not needed in the app image)
+sandbox-templates
+
+# Docs
+README.md
+
+# Test artefacts
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS noise
+.DS_Store
+Thumbs.db

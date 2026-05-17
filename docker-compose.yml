@@ -1,0 +1,127 @@
+name: vibe
+
+# =============================================================================
+# Services
+#   postgres  – PostgreSQL 16 database
+#   migrate   – one-shot Prisma migration runner (exits on success)
+#   app       – Next.js application
+#   inngest   – Inngest dev server (optional; enable with --profile dev)
+#
+# Usage
+#   cp env.example .env          # fill in API keys
+#   docker compose up --build    # full stack (no background job UI)
+#   docker compose --profile dev up --build   # + Inngest dev dashboard
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-vibe}
+      POSTGRES_USER:     ${POSTGRES_USER:-vibe}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vibe} -d ${POSTGRES_DB:-vibe}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - vibe_net
+
+  # ---------------------------------------------------------------------------
+  # Database migrations
+  # Runs `prisma migrate deploy` against the live database and exits.
+  # Uses the builder stage which contains the Prisma CLI and compiled schema.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      target: builder
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-vibe}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-vibe}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vibe_net
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # NEXT_PUBLIC_* values are embedded at build time; pass them as build args.
+  # All secret/runtime values are injected at container start via `environment`.
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      target: runner
+      args:
+        NEXT_PUBLIC_APP_URL:                          ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:            ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in your .env file}
+        NEXT_PUBLIC_CLERK_SIGN_IN_URL:                /sign-in
+        NEXT_PUBLIC_CLERK_SIGN_UP_URL:                /sign-up
+        NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL:  /
+        NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:  /
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # Internal DB URL – overrides anything that might be in a bind-mounted .env
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-vibe}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-vibe}
+      NEXT_PUBLIC_APP_URL:               ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      OPENAI_API_KEY:                    ${OPENAI_API_KEY:?Set OPENAI_API_KEY in your .env file}
+      E2B_API_KEY:                       ${E2B_API_KEY:?Set E2B_API_KEY in your .env file}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+      CLERK_SECRET_KEY:                  ${CLERK_SECRET_KEY:?Set CLERK_SECRET_KEY in your .env file}
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL:     /sign-in
+      NEXT_PUBLIC_CLERK_SIGN_UP_URL:     /sign-up
+      NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: /
+      NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL: /
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - vibe_net
+
+  # ---------------------------------------------------------------------------
+  # Inngest dev server  (optional – only started when --profile dev is passed)
+  #
+  # The Inngest dev server acts as a local event broker and calls back to the
+  # app's /api/inngest webhook to execute background functions.
+  #
+  # Dashboard: http://localhost:8288
+  # ---------------------------------------------------------------------------
+  inngest:
+    image: inngest/inngest:latest
+    profiles: ["dev"]
+    command:
+      - inngest
+      - dev
+      - --sdk-url
+      - http://app:3000/api/inngest
+      - --no-discovery
+    ports:
+      - "8288:8288"
+    depends_on:
+      - app
+    networks:
+      - vibe_net
+    restart: unless-stopped
+
+# =============================================================================
+volumes:
+  postgres_data:
+
+networks:
+  vibe_net:
+    driver: bridge
